@@ -29,6 +29,9 @@ export default function ApiStatusDashboard() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [newApiName, setNewApiName] = useState("");
   const [newApiUrl, setNewApiUrl] = useState("");
+  const [showErrorModal, setShowErrorModal] = useState(false);
+  const [selectedApiLogs, setSelectedApiLogs] = useState([]);
+  const [apiLogs, setApiLogs] = useState({}); // Armazena logs para cada API
 
   // Função para adicionar nova API
   const addNewApi = () => {
@@ -46,9 +49,46 @@ export default function ApiStatusDashboard() {
     setApis(prev => prev.filter((_, i) => i !== index));
   };
 
+  // Função para adicionar log de erro
+  const addErrorLog = (apiName, error, statusCode) => {
+    const timestamp = new Date().toLocaleString('pt-BR');
+    const logEntry = {
+      timestamp,
+      error,
+      statusCode,
+      id: Date.now() + Math.random()
+    };
+
+    setApiLogs(prev => {
+      const apiLogs = prev[apiName] || [];
+      const updatedLogs = [logEntry, ...apiLogs].slice(0, 5); // Mantém apenas os últimos 5
+      return {
+        ...prev,
+        [apiName]: updatedLogs
+      };
+    });
+  };
+
+  // Função para mostrar modal de logs de erro
+  const showErrorLogs = (apiName) => {
+    const logs = apiLogs[apiName] || [];
+    setSelectedApiLogs(logs);
+    setShowErrorModal(true);
+  };
+
   useEffect(() => {
     const checkApis = async () => {
       setLoading(true);
+      
+      // Temporarily suppress console errors
+      const originalError = console.error;
+      console.error = (...args) => {
+        if (args[0] && args[0].includes && args[0].includes('Failed to load resource')) {
+          return; // Suppress this specific error
+        }
+        originalError.apply(console, args);
+      };
+      
       const results = await Promise.all(
         apis.map(async ({ name, url }) => {
           try {
@@ -61,19 +101,26 @@ export default function ApiStatusDashboard() {
             
             // Trata erro 500 como online mas com erro
             if (res.status === 500) {
+              addErrorLog(name, 'Internal Server Error', res.status);
               return { name, url, status: "error", code: res.status };
             }
             
             if (res.ok) {
               return { name, url, status: "online", code: res.status };
             } else {
+              addErrorLog(name, `HTTP Error: ${res.statusText}`, res.status);
               return { name, url, status: "error", code: res.status };
             }
           } catch {
+            addErrorLog(name, 'Network Error - API não acessível', null);
             return { name, url, status: "offline", code: null };
           }
         })
       );
+      
+      // Restore original console.error
+      console.error = originalError;
+      
       setStatus(results);
       setLoading(false);
       setCountdown(99); // Reset countdown após atualização
@@ -239,14 +286,22 @@ export default function ApiStatusDashboard() {
                       </span>
                     )}
                     {api.status === "error" && (
-                      <span className="text-yellow-400 font-bold text-sm">
+                      <button
+                        onClick={() => showErrorLogs(api.name)}
+                        className="text-yellow-400 hover:text-yellow-300 font-bold text-sm transition-colors cursor-pointer underline"
+                        title="Clique para ver logs de erro"
+                      >
                         ⚠️ Erro
-                      </span>
+                      </button>
                     )}
                     {api.status === "offline" && (
-                      <span className="text-red-400 font-bold text-sm">
+                      <button
+                        onClick={() => showErrorLogs(api.name)}
+                        className="text-red-400 hover:text-red-300 font-bold text-sm transition-colors cursor-pointer underline"
+                        title="Clique para ver logs de erro"
+                      >
                         ❌ Offline
-                      </span>
+                      </button>
                     )}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right">
@@ -266,6 +321,73 @@ export default function ApiStatusDashboard() {
           </tbody>
         </table>
       </div>
+
+      {/* Modal para exibir logs de erro */}
+      {showErrorModal && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowErrorModal(false);
+            }
+          }}
+        >
+          <div className="bg-gray-800 rounded-xl p-6 w-full max-w-2xl mx-4 border border-gray-600 max-h-96 overflow-hidden">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold">📋 Últimos 5 Logs de Erro</h2>
+              <button
+                onClick={() => setShowErrorModal(false)}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="overflow-y-auto max-h-64">
+              {selectedApiLogs.length === 0 ? (
+                <div className="text-center text-gray-400 py-8">
+                  📝 Nenhum log de erro registrado ainda
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {selectedApiLogs.map((log, index) => (
+                    <div 
+                      key={log.id} 
+                      className="bg-gray-700 rounded-lg p-4 border-l-4 border-red-500"
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <span className="text-red-400 font-medium">
+                          #{selectedApiLogs.length - index}
+                        </span>
+                        <span className="text-gray-400 text-sm">
+                          {log.timestamp}
+                        </span>
+                      </div>
+                      <div className="text-white mb-1">
+                        <strong>Erro:</strong> {log.error}
+                      </div>
+                      {log.statusCode && (
+                        <div className="text-gray-300 text-sm">
+                          <strong>Código:</strong> {log.statusCode}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            
+            <div className="flex justify-end mt-4">
+              <button
+                onClick={() => setShowErrorModal(false)}
+                className="bg-gray-600 hover:bg-gray-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
